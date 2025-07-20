@@ -4,7 +4,6 @@ use serde::Deserialize;
 use simplelog::{Config, WriteLogger};
 use std::{
     fs::{OpenOptions, read_to_string},
-    io::Write,
     time::Duration,
 };
 
@@ -71,43 +70,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let mut status_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_file_path)?;
-
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         if any_success {
             if !is_online {
-                info!(
-                    "Internet appeared at {}",
-                    Local::now().format("%Y-%m-%d %H:%M:%S")
-                );
-                writeln!(status_file, "Internet appeared: {timestamp}")?;
+                info!("Internet appeared at {timestamp}");
                 is_online = true;
-            } else {
-                writeln!(status_file, "Internet OK: {timestamp}")?;
             }
+            // Do not log repeated OKs
         } else if is_online {
             if let Some(status) = last_status {
-                error!(
-                    "Internet unavailable (HTTP status unsuccessful: {status}). at {timestamp}."
-                );
-                writeln!(
-                    status_file,
-                    "Internet outage (unsuccessful status {status}): {timestamp}"
-                )?;
+                error!("Internet outage (unsuccessful status {status}): {timestamp}");
             } else if let Some(e) = last_error {
-                error!("Internet unavailable since {timestamp}. Error: {e}");
-                writeln!(status_file, "Internet outage: {timestamp}")?;
+                error!("Internet outage: {timestamp}. Error: {e}");
             } else {
-                error!("Internet unavailable since {timestamp}. Unknown error.");
-                writeln!(status_file, "Internet outage: {timestamp}")?;
+                error!("Internet outage: {timestamp}. Unknown error.");
             }
             is_online = false;
-        } else {
-            writeln!(status_file, "Internet still down: {timestamp}")?;
         }
+        // Do not log repeated outages
         // Wait for the interval specified in the configuration
         tokio::time::sleep(Duration::from_secs(config.check_interval_seconds)).await;
     }
