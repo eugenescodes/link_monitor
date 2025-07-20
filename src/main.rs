@@ -71,46 +71,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let mut status_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path)?;
+
         if any_success {
             if !is_online {
                 info!(
                     "Internet appeared at {}",
                     Local::now().format("%Y-%m-%d %H:%M:%S")
                 );
+                writeln!(status_file, "Internet appeared: {timestamp}")?;
                 is_online = true;
+            } else {
+                writeln!(status_file, "Internet OK: {timestamp}")?;
             }
+        } else if is_online {
+            if let Some(status) = last_status {
+                error!(
+                    "Internet unavailable (HTTP status unsuccessful: {status}). at {timestamp}."
+                );
+                writeln!(
+                    status_file,
+                    "Internet outage (unsuccessful status {status}): {timestamp}"
+                )?;
+            } else if let Some(e) = last_error {
+                error!("Internet unavailable since {timestamp}. Error: {e}");
+                writeln!(status_file, "Internet outage: {timestamp}")?;
+            } else {
+                error!("Internet unavailable since {timestamp}. Unknown error.");
+                writeln!(status_file, "Internet outage: {timestamp}")?;
+            }
+            is_online = false;
         } else {
-            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            if is_online {
-                if let Some(status) = last_status {
-                    error!(
-                        "Internet unavailable (HTTP status unsuccessful: {status}). at {timestamp}."
-                    );
-                    let mut outage_file = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(log_file_path)?;
-                    writeln!(
-                        outage_file,
-                        "Internet outage (unsuccessful status {status}): {timestamp}"
-                    )?;
-                } else if let Some(e) = last_error {
-                    error!("Internet unavailable since {timestamp}. Error: {e}");
-                    let mut outage_file = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(log_file_path)?;
-                    writeln!(outage_file, "Internet outage: {timestamp}")?;
-                } else {
-                    error!("Internet unavailable since {timestamp}. Unknown error.");
-                    let mut outage_file = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(log_file_path)?;
-                    writeln!(outage_file, "Internet outage: {timestamp}")?;
-                }
-                is_online = false;
-            }
+            writeln!(status_file, "Internet still down: {timestamp}")?;
         }
         // Wait for the interval specified in the configuration
         tokio::time::sleep(Duration::from_secs(config.check_interval_seconds)).await;
