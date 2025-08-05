@@ -7,6 +7,7 @@ A simple application to monitor internet connectivity by periodically sending HT
 - Configurable check interval, log file, and ping target via `config.toml`
 - Logs outages and recovery events
 - Separate outage log entries for unsuccessful HTTP status or request failures
+- Shutdown on Ctrl+C (SIGINT)
 
 ## Requirements
 
@@ -56,22 +57,27 @@ ping_target = "https://quad9.net, https://9.9.9.9, https://149.112.112.112"
    ./target/release/link_monitor
    ```
 
-3. Check the log file (default name: `internet_outages.log` in the project folder) for outage and recovery events.
-   Example log file:
+3. The application logs messages to both the console and the log file specified in your `config.toml` (default: `internet_outages.log`).
 
-   ```text
-   17:23:11 [INFO] Internet monitoring script started.
-   17:23:11 [INFO] Check target: https://quad9.net
-   17:23:11 [INFO] Check interval: 30 seconds.
-   17:23:11 [INFO] Outage log file: internet_outages.log
-   18:34:12 [INFO] Internet monitoring script started.
-   18:34:12 [INFO] Check target: https://quad9.net, https://9.9.9.9, https://149.112.112.112
-   18:34:12 [INFO] Check interval: 30 seconds.
-   18:34:12 [INFO] Outage log file: internet_outages.log
-   19:56:10 [ERROR] Internet unavailable since 2025-07-13 22:56:10. Error: error sending request for url (https://149.112.112.112/)
-   Internet outage: 2025-07-13 22:56:10
-   19:56:40 [INFO] Internet appeared at 2025-07-13 22:56:40
-   ```
+4. To stop the application gracefully, press Ctrl+C (SIGINT). The app will handle shutdown cleanly and log the event.
+
+5. Check the log file for detailed outage and recovery events.
+
+Example log file:
+
+```text
+17:23:11 [INFO] Internet monitoring script started.
+17:23:11 [INFO] Check target: https://quad9.net
+17:23:11 [INFO] Check interval: 30 seconds.
+17:23:11 [INFO] Outage log file: internet_outages.log
+18:34:12 [INFO] Internet monitoring script started.
+18:34:12 [INFO] Check target: https://quad9.net, https://9.9.9.9, https://149.112.112.112
+18:34:12 [INFO] Check interval: 30 seconds.
+18:34:12 [INFO] Outage log file: internet_outages.log
+19:56:10 [ERROR] Internet unavailable since 2025-07-13 22:56:10. Error: error sending request for url (https://149.112.112.112/)
+Internet outage: 2025-07-13 22:56:10
+19:56:40 [INFO] Internet appeared at 2025-07-13 22:56:40
+```
 
 ## License
 

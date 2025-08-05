@@ -1,9 +1,9 @@
 use chrono::Local;
 use log::{LevelFilter, error, info};
 use serde::Deserialize;
-use simplelog::{Config, WriteLogger};
+use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::{
-    fs::{OpenOptions, read_to_string},
+    fs::{File, read_to_string},
     time::Duration,
 };
 
@@ -15,30 +15,45 @@ pub struct AppConfig {
     ping_target: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Load configuration from config.toml
+fn load_config() -> Result<AppConfig, String> {
     let config_content = read_to_string("config.toml").map_err(|e| {
         format!("Failed to read config.toml: {e}. Make sure the file exists in the project root.")
     })?;
     let config: AppConfig = toml::from_str(&config_content)
         .map_err(|e| format!("Failed to parse config.toml: {e}. Check the file syntax."))?;
+    Ok(config)
+}
 
-    // 2. Initialize logger using the path from configuration
-    let log_file_path = &config.log_file;
-    let log_file_handle = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file_path)
-        .map_err(|e| format!("Failed to open log file '{log_file_path}': {e}"))?;
+fn init_logger(log_file_path: &str) -> Result<(), String> {
+    let log_file = File::create(log_file_path)
+        .map_err(|e| format!("Failed to create log file '{log_file_path}': {e}"))?;
 
-    WriteLogger::init(LevelFilter::Info, Config::default(), log_file_handle)?;
+    CombinedLogger::init(vec![
+        TermLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        ),
+        WriteLogger::new(LevelFilter::Info, Config::default(), log_file),
+    ])
+    .map_err(|e| format!("Failed to initialize logger: {e}"))?;
 
-    info!("Internet monitoring script started.");
-    info!("Check target: {}", config.ping_target);
-    info!("Check interval: {} seconds.", config.check_interval_seconds);
-    info!("Outage log file: {}", config.log_file);
+    Ok(())
+}
 
+use tokio::signal;
+
+/// Runs the internet connectivity monitoring loop.
+///
+/// # Arguments
+///
+/// * `config` - The application configuration.
+///
+/// # Returns
+///
+/// Returns `Ok(())` on graceful shutdown or an error if initialization fails.
+async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut is_online = true; // Initial internet connection state
 
     // Parse comma-separated list of targets, trim whitespace
@@ -49,54 +64,103 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    loop {
-        let mut any_success = false;
-        let mut last_error = None;
-        let mut last_status = None;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build HTTP client");
 
-        for target in &ping_targets {
-            match reqwest::get(target).await {
-                Ok(response) => {
-                    if response.status().is_success() {
-                        any_success = true;
+    let max_retries = 3;
+
+    loop {
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                info!("Shutdown signal received, stopping monitoring loop.");
+                break;
+            }
+            _ = async {
+                let mut any_success = false;
+                let mut last_error = None;
+                let mut last_status = None;
+
+                for target in &ping_targets {
+                    let mut attempt = 0;
+                    let mut success = false;
+                    while attempt < max_retries {
+                        match client.get(target).send().await {
+                            Ok(response) => {
+                                if response.status().is_success() {
+                                    any_success = true;
+                                    success = true;
+                                    break;
+                                } else {
+                                    last_status = Some(response.status());
+                                    error!(
+                                        "Request to target '{}' returned unsuccessful status: {}",
+                                        target,
+                                        response.status()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!("Request to target '{target}' failed with error: {e}");
+                                last_error = Some(e);
+                            }
+                        }
+                        attempt += 1;
+                    }
+                    if success {
                         break;
-                    } else {
-                        last_status = Some(response.status());
                     }
                 }
-                Err(e) => {
-                    last_error = Some(e);
-                }
-            }
-        }
 
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-        if any_success {
-            if !is_online {
-                info!("Internet appeared at {timestamp}");
-                is_online = true;
-            }
-            // Do not log repeated OKs
-        } else if is_online {
-            if let Some(status) = last_status {
-                error!("Internet outage (unsuccessful status {status}): {timestamp}");
-            } else if let Some(e) = last_error {
-                error!("Internet outage: {timestamp}. Error: {e}");
-            } else {
-                error!("Internet outage: {timestamp}. Unknown error.");
-            }
-            is_online = false;
+                let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+                if any_success {
+                    if !is_online {
+                        info!("Internet appeared at {timestamp}");
+                        is_online = true;
+                    }
+                    // Do not log repeated OKs
+                } else if is_online {
+                    if let Some(status) = last_status {
+                        error!("Internet outage (unsuccessful status {status}): {timestamp}");
+                    } else if let Some(e) = last_error {
+                        error!("Internet outage: {timestamp}. Error: {e}");
+                    } else {
+                        error!("Internet outage: {timestamp}. Unknown error.");
+                    }
+                    is_online = false;
+                }
+                // Do not log repeated outages
+                tokio::time::sleep(Duration::from_secs(config.check_interval_seconds)).await;
+            } => {}
         }
-        // Do not log repeated outages
-        // Wait for the interval specified in the configuration
-        tokio::time::sleep(Duration::from_secs(config.check_interval_seconds)).await;
     }
+    Ok(())
 }
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config()?;
+    init_logger(&config.log_file)?;
+
+    info!("Internet monitoring script started.");
+    info!("Check target: {}", config.ping_target);
+    info!("Check interval: {} seconds.", config.check_interval_seconds);
+    info!("Outage log file: {}", config.log_file);
+
+    run_monitor_loop(&config).await?;
+
+    info!("Internet monitoring script stopped.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::AppConfig;
+    use crate::{AppConfig, run_monitor_loop};
     use std::fs::File;
     use std::io::Write;
+    use tokio::runtime::Runtime;
+    use tokio::sync::oneshot;
 
     #[test]
     fn test_config_load() {
@@ -104,7 +168,7 @@ mod tests {
         let config_content = r#"
 log_file = "test_log.txt"
 check_interval_seconds = 1
-ping_target = "https://example.com"
+ping_target = "https://example.com, https://example.org"
 "#;
         let mut file = File::create("test_config.toml").expect("Failed to create test config");
         file.write_all(config_content.as_bytes())
@@ -115,8 +179,41 @@ ping_target = "https://example.com"
             std::fs::read_to_string("test_config.toml").expect("Failed to read test config");
         let config: Result<AppConfig, _> = toml::from_str(&config_str);
         assert!(config.is_ok(), "Config should parse correctly");
+        let config = config.unwrap();
+        assert_eq!(config.ping_target.split(',').count(), 2);
 
         // Clean up
         std::fs::remove_file("test_config.toml").ok();
+    }
+
+    #[test]
+    fn test_run_monitor_loop_shutdown() {
+        // This test will start the monitor loop and send a shutdown signal immediately
+        let config = AppConfig {
+            log_file: "test_log.txt".to_string(),
+            check_interval_seconds: 1,
+            ping_target: "https://example.com".to_string(),
+        };
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            // Use a oneshot channel to simulate shutdown signal
+            let (tx, rx) = oneshot::channel::<()>();
+
+            // Spawn the monitor loop in a task
+            let monitor_handle = tokio::spawn(async move {
+                // We run the monitor loop but it will be interrupted by the shutdown signal
+                tokio::select! {
+                    _ = run_monitor_loop(&config) => {},
+                    _ = rx => {},
+                }
+            });
+
+            // Send shutdown signal immediately
+            let _ = tx.send(());
+
+            // Wait for the monitor loop to finish
+            let _ = monitor_handle.await;
+        });
     }
 }
