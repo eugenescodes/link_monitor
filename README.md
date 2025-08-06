@@ -39,6 +39,8 @@ ping_target = "https://quad9.net, https://9.9.9.9, https://149.112.112.112"
 
 ## Usage
 
+### Running Locally
+
 1. Build the project:
 
    ```bash
@@ -57,11 +59,130 @@ ping_target = "https://quad9.net, https://9.9.9.9, https://149.112.112.112"
    ./target/release/link_monitor
    ```
 
+### Running with Docker
+
+1. Build the Docker image:
+
+   ```bash
+   docker build -t link_monitor .
+   ```
+
+2. Run the container, mounting your config and log directory as needed:
+
+   ```bash
+   docker run -v $(pwd)/config.toml:/etc/link_monitor/config.toml -v $(pwd)/logs:/etc/link_monitor/logs link_monitor
+   ```
+
+   Adjust the volume mounts to your config and desired log directory.
+
+### Running with Podman
+
+1. Build the Docker image use Podman:
+
+   ```bash
+   podman build -t link_monitor .
+   ```
+
+2. Run the container, mounting your config and log directory as needed:
+
+   ```bash
+   podman run -v $(pwd)/config.toml:/etc/link_monitor/config.toml:Z -v $(pwd)/logs:/etc/link_monitor/logs:Z link_monitor
+   ```
+
+   Adjust the volume mounts to your config and desired log directory.
+
 3. The application logs messages to both the console and the log file specified in your `config.toml` (default: `internet_outages.log`).
 
 4. To stop the application gracefully, press Ctrl+C (SIGINT). The app will handle shutdown cleanly and log the event.
 
 5. Check the log file for detailed outage and recovery events.
+
+## Updating the Container with New Code or Config
+
+If you change source code or configuration files, rebuild the image and rerun the container:
+
+### Using Podman
+
+```bash
+podman build -t link_monitor .
+podman run -v $(pwd)/config.toml:/etc/link_monitor/config.toml:Z -v $(pwd)/logs:/etc/link_monitor/logs:Z link_monitor
+```
+
+### Using Docker
+
+```bash
+docker build -t link_monitor .
+docker run -v $(pwd)/config.toml:/etc/link_monitor/config.toml -v $(pwd)/logs:/etc/link_monitor/logs link_monitor
+```
+
+To remove old images and containers:
+
+### Using Podman
+
+```bash
+podman stop <container_id_or_name>
+podman rm <container_id_or_name>
+podman rmi <image_id_or_name>
+podman system prune
+```
+
+### Using Docker
+
+```bash
+docker stop <container_id_or_name>
+docker rm <container_id_or_name>
+docker rmi <image_id_or_name>
+docker system prune
+```
+
+## Cleaning Up Docker and Podman
+
+To remove unused images, containers, and volumes, use the following commands:
+
+- List all containers:
+
+  ```bash
+  docker ps -a
+  podman ps -a
+  ```
+
+- Stop and remove containers:
+
+  ```bash
+  docker stop <container_id_or_name>
+  docker rm <container_id_or_name>
+  podman stop <container_id_or_name>
+  podman rm <container_id_or_name>
+  ```
+
+- Remove images:
+
+  ```bash
+  docker rmi <image_id_or_name>
+  podman rmi <image_id_or_name>
+  ```
+
+- Remove dangling images and unused volumes:
+
+  ```bash
+  docker system prune
+  podman system prune
+  ```
+
+## Viewing Logs
+
+- To view container logs in real-time:
+
+  ```bash
+  docker logs -f <container_id_or_name>
+  podman logs -f <container_id_or_name>
+  ```
+
+- To view log files on the host machine (assuming you mounted the logs directory):
+
+  ```bash
+  tail -f logs/internet_outages.log
+  ```
 
 Example log file:
 

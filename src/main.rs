@@ -69,7 +69,10 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
         .build()
         .expect("Failed to build HTTP client");
 
-    let max_retries = 3;
+    let max_retries = 5;
+    let retry_delay = Duration::from_secs(2);
+    let mut consecutive_failures = 0;
+    let failure_threshold = 3;
 
     loop {
         tokio::select! {
@@ -106,6 +109,9 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
                                 last_error = Some(e);
                             }
                         }
+                        if !success {
+                            tokio::time::sleep(retry_delay).await;
+                        }
                         attempt += 1;
                     }
                     if success {
@@ -115,22 +121,26 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
 
                 let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
                 if any_success {
+                    consecutive_failures = 0;
                     if !is_online {
                         info!("Internet appeared at {timestamp}");
                         is_online = true;
                     }
                     // Do not log repeated OKs
-                } else if is_online {
-                    if let Some(status) = last_status {
-                        error!("Internet outage (unsuccessful status {status}): {timestamp}");
-                    } else if let Some(e) = last_error {
-                        error!("Internet outage: {timestamp}. Error: {e}");
-                    } else {
-                        error!("Internet outage: {timestamp}. Unknown error.");
+                } else {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= failure_threshold && is_online {
+                        if let Some(status) = last_status {
+                            error!("Internet outage (unsuccessful status {status}): {timestamp}");
+                        } else if let Some(e) = last_error {
+                            error!("Internet outage: {timestamp}. Error: {e}");
+                        } else {
+                            error!("Internet outage: {timestamp}. Unknown error.");
+                        }
+                        is_online = false;
                     }
-                    is_online = false;
                 }
-                // Do not log repeated outages
+                // Wait for the interval specified in the configuration
                 tokio::time::sleep(Duration::from_secs(config.check_interval_seconds)).await;
             } => {}
         }
