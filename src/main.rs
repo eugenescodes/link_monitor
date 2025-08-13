@@ -97,15 +97,21 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
                                     break;
                                 } else {
                                     last_status = Some(response.status());
-                                    error!(
-                                        "Request to target '{}' returned unsuccessful status: {}",
-                                        target,
-                                        response.status()
-                                    );
+                                    // Log error only if no other target succeeded
+                                    if !any_success {
+                                        error!(
+                                            "Request to target '{}' returned unsuccessful status: {}",
+                                            target,
+                                            response.status()
+                                        );
+                                    }
                                 }
                             }
                             Err(e) => {
-                                error!("Request to target '{target}' failed with error: {e}");
+                                // Log error only if no other target succeeded
+                                if !any_success {
+                                    error!("Request to target '{target}' failed with error: {e}");
+                                }
                                 last_error = Some(e);
                             }
                         }
