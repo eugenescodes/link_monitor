@@ -30,7 +30,7 @@ Create a `config.toml` file in the project root with the following content:
 ```toml
 log_file = "internet_outages.log"
 check_interval_seconds = 30
-ping_target = "https://quad9.net, https://9.9.9.9, https://149.112.112.112"
+ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google"
 ```
 
 - `log_file`: Path to the log file for outages and events
@@ -188,14 +188,14 @@ Example log file:
 
 ```text
 17:23:11 [INFO] Internet monitoring script started.
-17:23:11 [INFO] Check target: https://quad9.net
+17:23:11 [INFO] Check target: https://on.quad9.net, https://one.one.one.one/help, https://dns.google
 17:23:11 [INFO] Check interval: 30 seconds.
 17:23:11 [INFO] Outage log file: internet_outages.log
 18:34:12 [INFO] Internet monitoring script started.
-18:34:12 [INFO] Check target: https://quad9.net, https://9.9.9.9, https://149.112.112.112
+18:34:12 [INFO] Check target: https://on.quad9.net, https://one.one.one.one/help, https://dns.google
 18:34:12 [INFO] Check interval: 30 seconds.
 18:34:12 [INFO] Outage log file: internet_outages.log
-19:56:10 [ERROR] Internet unavailable since 2025-07-13 22:56:10. Error: error sending request for url (https://149.112.112.112/)
+19:56:10 [ERROR] Internet unavailable since 2025-07-13 22:56:10. Error: error sending request for url (https://on.quad9.net/)
 Internet outage: 2025-07-13 22:56:10
 19:56:40 [INFO] Internet appeared at 2025-07-13 22:56:40
 ```

@@ -2,4 +2,4 @@
 
 log_file = "internet_outages.log"
 check_interval_seconds = 30
-ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google/"
+ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google"
