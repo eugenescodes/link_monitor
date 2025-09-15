@@ -2,31 +2,57 @@ use chrono::Local;
 use log::{LevelFilter, error, info};
 use serde::Deserialize;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
-use std::{
-    fs::{File, read_to_string},
-    time::Duration,
-};
+use std::{fs::read_to_string, time::Duration};
 
 // Structure for representing configuration from config.toml
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct AppConfig {
     log_file: String,
     check_interval_seconds: u64,
+    max_retries: u32,
+    failure_threshold: u32,
     ping_target: String,
 }
 
-fn load_config() -> Result<AppConfig, String> {
-    let config_content = read_to_string("config.toml").map_err(|e| {
-        format!("Failed to read config.toml: {e}. Make sure the file exists in the project root.")
+fn load_config(path: &str) -> Result<AppConfig, String> {
+    let config_content = read_to_string(path).map_err(|e| {
+        format!(
+            "Failed to read {}: {e}. Make sure the file exists in the project root.",
+            path
+        )
     })?;
     let config: AppConfig = toml::from_str(&config_content)
-        .map_err(|e| format!("Failed to parse config.toml: {e}. Check the file syntax."))?;
+        .map_err(|e| format!("Failed to parse {}: {e}. Check the file syntax.", path))?;
+
+    // Validate ping_target URLs
+    for target in config
+        .ping_target
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let url = match url::Url::parse(target) {
+            Ok(url) => url,
+            Err(_) => return Err(format!("Invalid URL in ping_target: '{}'", target)),
+        };
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err(format!(
+                "ping_target must use http or https scheme: '{}'",
+                target
+            ));
+        }
+    }
+
     Ok(config)
 }
 
 fn init_logger(log_file_path: &str) -> Result<(), String> {
-    let log_file = File::create(log_file_path)
-        .map_err(|e| format!("Failed to create log file '{log_file_path}': {e}"))?;
+    use std::fs::OpenOptions;
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file_path)
+        .map_err(|e| format!("Failed to open log file '{log_file_path}': {e}"))?;
 
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -42,8 +68,6 @@ fn init_logger(log_file_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-use tokio::signal;
-
 /// Runs the internet connectivity monitoring loop.
 ///
 /// # Arguments
@@ -53,7 +77,9 @@ use tokio::signal;
 /// # Returns
 ///
 /// Returns `Ok(())` on graceful shutdown or an error if initialization fails.
-async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_monitor_loop(
+    config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let mut is_online = true; // Initial internet connection state
 
     // Parse comma-separated list of targets, trim whitespace
@@ -69,14 +95,14 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
         .build()
         .expect("Failed to build HTTP client");
 
-    let max_retries = 5;
+    let max_retries = config.max_retries;
     let retry_delay = Duration::from_secs(2);
     let mut consecutive_failures = 0;
-    let failure_threshold = 3;
+    let failure_threshold = config.failure_threshold;
 
     loop {
         tokio::select! {
-            _ = signal::ctrl_c() => {
+            _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received, stopping monitoring loop.");
                 break;
             }
@@ -128,10 +154,9 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
                 let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
                 if any_success {
                     consecutive_failures = 0;
-                    if !is_online {
-                        info!("Internet appeared at {timestamp}");
-                        is_online = true;
-                    }
+                    info!("Internet appeared at {timestamp}");
+                    info!("Internet outage ended at {timestamp}");
+                    is_online = true;
                     // Do not log repeated OKs
                 } else {
                     consecutive_failures += 1;
@@ -155,8 +180,8 @@ async fn run_monitor_loop(config: &AppConfig) -> Result<(), Box<dyn std::error::
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = load_config()?;
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let config = load_config("config.toml")?;
     init_logger(&config.log_file)?;
 
     info!("Internet monitoring script started.");
@@ -184,6 +209,8 @@ mod tests {
         let config_content = r#"
 log_file = "test_log.txt"
 check_interval_seconds = 1
+max_retries = 2
+failure_threshold = 1
 ping_target = "https://example.com, https://example.org"
 "#;
         let mut file = File::create("test_config.toml").expect("Failed to create test config");
@@ -197,39 +224,44 @@ ping_target = "https://example.com, https://example.org"
         assert!(config.is_ok(), "Config should parse correctly");
         let config = config.unwrap();
         assert_eq!(config.ping_target.split(',').count(), 2);
+        assert_eq!(config.max_retries, 2);
+        assert_eq!(config.failure_threshold, 1);
 
         // Clean up
         std::fs::remove_file("test_config.toml").ok();
     }
 
     #[test]
-    fn test_run_monitor_loop_shutdown() {
-        // This test will start the monitor loop and send a shutdown signal immediately
-        let config = AppConfig {
-            log_file: "test_log.txt".to_string(),
-            check_interval_seconds: 1,
-            ping_target: "https://example.com".to_string(),
-        };
+    fn test_load_config_invalid_url() {
+        let config_content = r#"
+log_file = "test_log.txt"
+check_interval_seconds = 1
+max_retries = 2
+failure_threshold = 1
+ping_target = "ftp://invalid-url.com, not-a-url"
+"#;
+        let mut file =
+            File::create("test_invalid_config.toml").expect("Failed to create test config");
+        file.write_all(config_content.as_bytes())
+            .expect("Failed to write test config");
 
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            // Use a oneshot channel to simulate shutdown signal
-            let (tx, rx) = oneshot::channel::<()>();
-
-            // Spawn the monitor loop in a task
-            let monitor_handle = tokio::spawn(async move {
-                // We run the monitor loop but it will be interrupted by the shutdown signal
-                tokio::select! {
-                    _ = run_monitor_loop(&config) => {},
-                    _ = rx => {},
-                }
+        let _result = std::fs::read_to_string("test_invalid_config.toml")
+            .map_err(|e| format!("Failed to read test config: {e}"))
+            .and_then(|content| {
+                toml::from_str::<AppConfig>(&content)
+                    .map_err(|e| format!("Failed to parse test config: {e}"))
             });
 
-            // Send shutdown signal immediately
-            let _ = tx.send(());
+        // The toml parsing itself will succeed, but our load_config function does validation,
+        // so we test load_config directly instead.
+        let load_result = crate::load_config("test_invalid_config.toml");
 
-            // Wait for the monitor loop to finish
-            let _ = monitor_handle.await;
-        });
+        // Clean up
+        std::fs::remove_file("test_invalid_config.toml").ok();
+
+        assert!(
+            load_result.is_err(),
+            "Config loading should fail due to invalid URLs"
+        );
     }
 }

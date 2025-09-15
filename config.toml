@@ -2,4 +2,6 @@
 
 log_file = "internet_outages.log"
 check_interval_seconds = 30
+max_retries = 5
+failure_threshold = 3
 ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google"

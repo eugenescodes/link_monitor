@@ -30,11 +30,15 @@ Create a `config.toml` file in the project root with the following content:
 ```toml
 log_file = "internet_outages.log"
 check_interval_seconds = 30
+max_retries = 5
+failure_threshold = 3
 ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google"
 ```
 
 - `log_file`: Path to the log file for outages and events
 - `check_interval_seconds`: How often to check connectivity (in seconds)
+- `max_retries`: Number of retries per target before considering failure
+- `failure_threshold`: Number of consecutive failures before logging an outage
 - `ping_target`: A single URL or a comma-separated list of URLs to check for connectivity. The script considers the internet available if any of the targets respond successfully.
 
 ## Usage
