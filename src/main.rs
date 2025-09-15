@@ -154,9 +154,9 @@ async fn run_monitor_loop(
                 let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
                 if any_success {
                     consecutive_failures = 0;
-                    info!("Internet appeared at {timestamp}");
-                    info!("Internet outage ended at {timestamp}");
-                    is_online = true;
+                        info!("Internet appeared at {timestamp}");
+                        info!("Internet outage ended at {timestamp}");
+                        is_online = true;
                     // Do not log repeated OKs
                 } else {
                     consecutive_failures += 1;
