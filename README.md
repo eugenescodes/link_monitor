@@ -1,45 +1,32 @@
+
 # Link Monitor
 
-A simple application to monitor internet connectivity by periodically sending HTTP requests to a target URL and logging outages.
+A Rust-based internet connectivity monitoring tool that periodically checks specified URLs and logs outages and recoveries.
 
-## Features
+## Project Purpose
 
-- Configurable check interval, log file, and ping target via `config.toml`
-- Logs outages and recovery events
-- Separate outage log entries for unsuccessful HTTP status or request failures
-- Shutdown on Ctrl+C (SIGINT)
-
-## Requirements
-
-- Rust (install with your package manager or from <https://www.rust-lang.org/tools/install>)
-- A `config.toml` file in the project root (see below)
-
-### Quick Start
-
-Clone the repository and enter the directory:
-
-```bash
-git clone <repo-url>
-cd <folder>
-```
+This tool monitors internet connectivity by sending HTTP GET requests to configured target URLs. It logs the status of each target and detects internet outages based on configurable failure thresholds.
 
 ## Configuration
 
-Create a `config.toml` file in the project root with the following content:
+The project uses a `config.toml` file to configure its behavior. Key configuration options include:
 
-```toml
-log_file = "internet_outages.log"
-check_interval_seconds = 30
-max_retries = 5
-failure_threshold = 3
-ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google"
-```
+- `log_file`: Path to the log file where monitoring logs are saved.
+- `check_interval_seconds`: Interval in seconds between each round of checks.
+- `max_retries`: Number of retry attempts for each target before considering it failed.
+- `failure_threshold`: Number of consecutive failed checks across all targets to declare an internet outage.
+- `ping_target`: A list of URLs to be monitored.
 
-- `log_file`: Path to the log file for outages and events
-- `check_interval_seconds`: How often to check connectivity (in seconds)
-- `max_retries`: Number of retries per target before considering failure
-- `failure_threshold`: Number of consecutive failures before logging an outage
-- `ping_target`: A single URL or a comma-separated list of URLs to check for connectivity. The script considers the internet available if any of the targets respond successfully.
+## Main Components and Workflow
+
+- Loads configuration from `config.toml`.
+- Initializes logging to file and console.
+- Creates an asynchronous Tokio runtime for concurrent operations.
+- Runs a monitoring loop that:
+  - Checks each target URL with retries.
+  - Logs success or failure for each attempt.
+  - Tracks consecutive failures and logs internet outages when thresholds are met.
+- Supports graceful shutdown on Ctrl+C (SIGINT).
 
 ## Usage
 
@@ -63,146 +50,42 @@ ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.g
    ./target/release/link_monitor
    ```
 
-### Running with Docker
+### Running with Docker or Podman
 
-1. Build the Docker image:
-
-   ```bash
-   docker build -t link_monitor .
-   ```
-
-2. Run the container, mounting your config and log directory as needed:
-
-   ```bash
-   docker run -v $(pwd)/config.toml:/etc/link_monitor/config.toml -v $(pwd)/logs:/etc/link_monitor/logs link_monitor
-   ```
-
-   Adjust the volume mounts to your config and desired log directory.
-
-### Running with Podman
-
-1. Build the Docker image use Podman:
-
-   ```bash
-   podman build -t link_monitor .
-   ```
-
-2. Run the container, mounting your config and log directory as needed:
-
-   ```bash
-   podman run -v $(pwd)/config.toml:/etc/link_monitor/config.toml:Z -v $(pwd)/logs:/etc/link_monitor/logs:Z link_monitor
-   ```
-
-   Adjust the volume mounts to your config and desired log directory.
-
-3. The application logs messages to both the console and the log file specified in your `config.toml` (default: `internet_outages.log`).
-
-4. To stop the application gracefully, press Ctrl+C (SIGINT). The app will handle shutdown cleanly and log the event.
-
-5. Check the log file for detailed outage and recovery events.
-
-## Updating the Container with New Code or Config
-
-If you change source code or configuration files, rebuild the image and rerun the container:
-
-### Using Podman
-
-```bash
-podman build -t link_monitor .
-podman run -v $(pwd)/config.toml:/etc/link_monitor/config.toml:Z -v $(pwd)/logs:/etc/link_monitor/logs:Z link_monitor
-```
-
-### Using Docker
+Build the container image:
 
 ```bash
 docker build -t link_monitor .
+# or
+podman build -t link_monitor .
+```
+
+Run the container, mounting your config and log directory as needed:
+
+```bash
 docker run -v $(pwd)/config.toml:/etc/link_monitor/config.toml -v $(pwd)/logs:/etc/link_monitor/logs link_monitor
+# or
+podman run -v $(pwd)/config.toml:/etc/link_monitor/config.toml:Z -v $(pwd)/logs:/etc/link_monitor/logs:Z link_monitor
 ```
 
-To remove old images and containers:
+### Stopping the Application
 
-### Using Podman
+Press Ctrl+C to stop the application gracefully. It will log shutdown events.
 
-```bash
-podman stop <container_id_or_name>
-podman rm <container_id_or_name>
-podman rmi <image_id_or_name>
-podman system prune
-```
+### Viewing Logs
 
-### Using Docker
-
-```bash
-docker stop <container_id_or_name>
-docker rm <container_id_or_name>
-docker rmi <image_id_or_name>
-docker system prune
-```
-
-## Cleaning Up Docker and Podman
-
-To remove unused images, containers, and volumes, use the following commands:
-
-- List all containers:
-
-  ```bash
-  docker ps -a
-  podman ps -a
-  ```
-
-- Stop and remove containers:
-
-  ```bash
-  docker stop <container_id_or_name>
-  docker rm <container_id_or_name>
-  podman stop <container_id_or_name>
-  podman rm <container_id_or_name>
-  ```
-
-- Remove images:
-
-  ```bash
-  docker rmi <image_id_or_name>
-  podman rmi <image_id_or_name>
-  ```
-
-- Remove dangling images and unused volumes:
-
-  ```bash
-  docker system prune
-  podman system prune
-  ```
-
-## Viewing Logs
-
-- To view container logs in real-time:
+- View container logs in real-time:
 
   ```bash
   docker logs -f <container_id_or_name>
   podman logs -f <container_id_or_name>
   ```
 
-- To view log files on the host machine (assuming you mounted the logs directory):
+- View log files on the host machine (assuming logs directory is mounted):
 
   ```bash
-  tail -f logs/internet_outages.log
+  tail -f logs/internet_monitor.log
   ```
-
-Example log file:
-
-```text
-17:23:11 [INFO] Internet monitoring script started.
-17:23:11 [INFO] Check target: https://on.quad9.net, https://one.one.one.one/help, https://dns.google
-17:23:11 [INFO] Check interval: 30 seconds.
-17:23:11 [INFO] Outage log file: internet_outages.log
-18:34:12 [INFO] Internet monitoring script started.
-18:34:12 [INFO] Check target: https://on.quad9.net, https://one.one.one.one/help, https://dns.google
-18:34:12 [INFO] Check interval: 30 seconds.
-18:34:12 [INFO] Outage log file: internet_outages.log
-19:56:10 [ERROR] Internet unavailable since 2025-07-13 22:56:10. Error: error sending request for url (https://on.quad9.net/)
-Internet outage: 2025-07-13 22:56:10
-19:56:40 [INFO] Internet appeared at 2025-07-13 22:56:40
-```
 
 ## License
 

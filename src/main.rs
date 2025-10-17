@@ -11,7 +11,7 @@ pub struct AppConfig {
     check_interval_seconds: u64,
     max_retries: u32,
     failure_threshold: u32,
-    ping_target: String,
+    ping_target: Vec<String>,
 }
 
 fn load_config(path: &str) -> Result<AppConfig, String> {
@@ -25,12 +25,7 @@ fn load_config(path: &str) -> Result<AppConfig, String> {
         .map_err(|e| format!("Failed to parse {}: {e}. Check the file syntax.", path))?;
 
     // Validate ping_target URLs
-    for target in config
-        .ping_target
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
+    for target in &config.ping_target {
         let url = match url::Url::parse(target) {
             Ok(url) => url,
             Err(_) => return Err(format!("Invalid URL in ping_target: '{}'", target)),
@@ -80,21 +75,44 @@ fn init_logger(log_file_path: &str) -> Result<(), String> {
 async fn run_monitor_loop(
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    /// Attempts to send HTTP GET requests to a target URL with retries.
+    ///
+    /// Returns `Ok(true)` if any attempt succeeds, otherwise `Ok(false)`.
+    async fn check_target(
+        client: &reqwest::Client,
+        target: &str,
+        max_retries: u32,
+        retry_delay: Duration,
+    ) -> Result<bool, Option<reqwest::StatusCode>> {
+        let attempt = 0;
+        while attempt < max_retries {
+            match client.get(target).send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        return Ok(true);
+                    } else {
+                        return Err(Some(response.status()));
+                    }
+                }
+                Err(_e) => {
+                    // Log the error for debugging (optional)
+                    // eprintln!("Request error for target {}: {:?}", target, e);
+                    // Sleep before retrying
+                    tokio::time::sleep(retry_delay).await;
+                    // Return Err with None to indicate request failure without HTTP status
+                    return Err(None);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     let mut is_online = true; // Initial internet connection state
-
-    // Parse comma-separated list of targets, trim whitespace
-    let ping_targets: Vec<String> = config
-        .ping_target
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
+    let ping_target: Vec<String> = config.ping_target.clone();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("Failed to build HTTP client");
-
     let max_retries = config.max_retries;
     let retry_delay = Duration::from_secs(2);
     let mut consecutive_failures = 0;
@@ -108,70 +126,52 @@ async fn run_monitor_loop(
             }
             _ = async {
                 let mut any_success = false;
-                let mut last_error = None;
                 let mut last_status = None;
+                let mut last_failed_target: Option<String> = None;
 
-                for target in &ping_targets {
-                    let mut attempt = 0;
-                    let mut success = false;
-                    while attempt < max_retries {
-                        match client.get(target).send().await {
-                            Ok(response) => {
-                                if response.status().is_success() {
-                                    any_success = true;
-                                    success = true;
-                                    break;
-                                } else {
-                                    last_status = Some(response.status());
-                                    // Log error only if no other target succeeded
-                                    if !any_success {
-                                        error!(
-                                            "Request to target '{}' returned unsuccessful status: {}",
-                                            target,
-                                            response.status()
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                // Log error only if no other target succeeded
-                                if !any_success {
-                                    error!("Request to target '{target}' failed with error: {e}");
-                                }
-                                last_error = Some(e);
-                            }
+                for target in &ping_target {
+                    match check_target(&client, target, max_retries, retry_delay).await {
+                        Ok(true) => {
+                            any_success = true;
+                            break;
                         }
-                        if !success {
-                            tokio::time::sleep(retry_delay).await;
+                        Ok(false) => {
+                            // No success, continue to next target
                         }
-                        attempt += 1;
-                    }
-                    if success {
-                        break;
+                        Err(status) => {
+                            last_status = status;
+                            last_failed_target = Some(target.clone());
+                            error!("Request to target '{}' returned unsuccessful status: {:?}", target, status);
+                        }
                     }
                 }
 
                 let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
                 if any_success {
                     consecutive_failures = 0;
+                    if !is_online {
                         info!("Internet appeared at {timestamp}");
                         info!("Internet outage ended at {timestamp}");
                         is_online = true;
-                    // Do not log repeated OKs
+                    }
                 } else {
                     consecutive_failures += 1;
+
                     if consecutive_failures >= failure_threshold && is_online {
                         if let Some(status) = last_status {
-                            error!("Internet outage (unsuccessful status {status}): {timestamp}");
-                        } else if let Some(e) = last_error {
-                            error!("Internet outage: {timestamp}. Error: {e}");
+                            if let Some(failed_target) = &last_failed_target {
+                                error!("Internet outage (unsuccessful status {status}) on target '{}': {timestamp}", failed_target);
+                            } else {
+                                error!("Internet outage (unsuccessful status {status}): {timestamp}");
+                            }
+                        } else if let Some(failed_target) = &last_failed_target {
+                            error!("Internet outage: request failure on target '{}': {timestamp}", failed_target);
                         } else {
                             error!("Internet outage: {timestamp}. Unknown error.");
                         }
                         is_online = false;
                     }
                 }
-                // Wait for the interval specified in the configuration
                 tokio::time::sleep(Duration::from_secs(config.check_interval_seconds)).await;
             } => {}
         }
@@ -185,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     init_logger(&config.log_file)?;
 
     info!("Internet monitoring script started.");
-    info!("Check target: {}", config.ping_target);
+    info!("Check targets: {:?}", config.ping_target);
     info!("Check interval: {} seconds.", config.check_interval_seconds);
     info!("Outage log file: {}", config.log_file);
 
@@ -211,7 +211,7 @@ log_file = "test_log.txt"
 check_interval_seconds = 1
 max_retries = 2
 failure_threshold = 1
-ping_target = "https://example.com, https://example.org"
+ping_target = ["https://example.com", "https://example.org"]
 "#;
         let mut file = File::create("test_config.toml").expect("Failed to create test config");
         file.write_all(config_content.as_bytes())
@@ -223,7 +223,7 @@ ping_target = "https://example.com, https://example.org"
         let config: Result<AppConfig, _> = toml::from_str(&config_str);
         assert!(config.is_ok(), "Config should parse correctly");
         let config = config.unwrap();
-        assert_eq!(config.ping_target.split(',').count(), 2);
+        assert_eq!(config.ping_target.len(), 2);
         assert_eq!(config.max_retries, 2);
         assert_eq!(config.failure_threshold, 1);
 
@@ -238,7 +238,7 @@ log_file = "test_log.txt"
 check_interval_seconds = 1
 max_retries = 2
 failure_threshold = 1
-ping_target = "ftp://invalid-url.com, not-a-url"
+ping_target = ["ftp://invalid-url.com", "not-a-url"]
 "#;
         let mut file =
             File::create("test_invalid_config.toml").expect("Failed to create test config");

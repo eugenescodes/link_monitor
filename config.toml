@@ -1,7 +1,12 @@
-# config.toml
-
-log_file = "internet_outages.log"
+log_file = "logs/internet_monitor.log"
+log_to_console = true
 check_interval_seconds = 30
-max_retries = 5
+max_retries = 2
 failure_threshold = 3
-ping_target = "https://on.quad9.net, https://one.one.one.one/help, https://dns.google"
+
+# List of targets to monitor
+ping_target = [
+    "https://on.quad9.net",
+    "https://one.one.one.one/help",
+    "https://dns.google",
+]
