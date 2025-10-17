@@ -84,14 +84,14 @@ async fn run_monitor_loop(
         max_retries: u32,
         retry_delay: Duration,
     ) -> Result<bool, Option<reqwest::StatusCode>> {
-        let attempt = 0;
-        while attempt < max_retries {
+        let mut last_status: Option<reqwest::StatusCode> = None;
+        for _attempt in 0..max_retries {
             match client.get(target).send().await {
                 Ok(response) => {
                     if response.status().is_success() {
                         return Ok(true);
                     } else {
-                        return Err(Some(response.status()));
+                        last_status = Some(response.status());
                     }
                 }
                 Err(_e) => {
@@ -99,12 +99,14 @@ async fn run_monitor_loop(
                     // eprintln!("Request error for target {}: {:?}", target, e);
                     // Sleep before retrying
                     tokio::time::sleep(retry_delay).await;
-                    // Return Err with None to indicate request failure without HTTP status
-                    return Err(None);
                 }
             }
         }
-        Ok(false)
+        if let Some(status) = last_status {
+            Err(Some(status))
+        } else {
+            Ok(false)
+        }
     }
 
     let mut is_online = true; // Initial internet connection state
