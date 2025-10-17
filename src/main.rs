@@ -83,15 +83,20 @@ async fn run_monitor_loop(
         target: &str,
         max_retries: u32,
         retry_delay: Duration,
-    ) -> Result<bool, Option<reqwest::StatusCode>> {
-        let mut last_status: Option<reqwest::StatusCode> = None;
+    ) -> Result<bool, Option<(reqwest::StatusCode, String)>> {
+        let mut last_status: Option<(reqwest::StatusCode, String)> = None;
         for _attempt in 0..max_retries {
             match client.get(target).send().await {
                 Ok(response) => {
                     if response.status().is_success() {
                         return Ok(true);
                     } else {
-                        last_status = Some(response.status());
+                        let status = response.status();
+                        let reason = status
+                            .canonical_reason()
+                            .unwrap_or("Unknown reason")
+                            .to_string();
+                        last_status = Some((status, reason));
                     }
                 }
                 Err(_e) => {
@@ -128,7 +133,7 @@ async fn run_monitor_loop(
             }
             _ = async {
                 let mut any_success = false;
-                let mut last_status = None;
+                let mut last_status: Option<(reqwest::StatusCode, String)> = None;
                 let mut last_failed_target: Option<String> = None;
 
                 for target in &ping_target {
@@ -140,10 +145,16 @@ async fn run_monitor_loop(
                         Ok(false) => {
                             // No success, continue to next target
                         }
-                        Err(status) => {
-                            last_status = status;
+
+                        Err(status_opt) => {
                             last_failed_target = Some(target.clone());
-                            error!("Request to target '{}' returned unsuccessful status: {:?}", target, status);
+                            if let Some((status, reason)) = status_opt {
+                                last_status = Some((status, reason.clone()));
+                                error!("Request to target '{}' returned unsuccessful status: {} ({})", target, status, reason);
+                            } else {
+                                last_status = None;
+                                error!("Request to target '{}' failed due to network or other error", target);
+                            }
                         }
                     }
                 }
@@ -159,17 +170,19 @@ async fn run_monitor_loop(
                 } else {
                     consecutive_failures += 1;
 
+
+
                     if consecutive_failures >= failure_threshold && is_online {
-                        if let Some(status) = last_status {
+                        if let Some((status, reason)) = last_status {
                             if let Some(failed_target) = &last_failed_target {
-                                error!("Internet outage (unsuccessful status {status}) on target '{}': {timestamp}", failed_target);
+                                error!("Internet outage detected on target '{}' at {timestamp}. Status: {} ({}). Please check your network connection or DNS settings. Please verify your internet connection and retry.", failed_target, status, reason);
                             } else {
-                                error!("Internet outage (unsuccessful status {status}): {timestamp}");
+                                error!("Internet outage detected at {timestamp}. Status: {} ({}). Please check your network connection or DNS settings. Please verify your internet connection and retry.", status, reason);
                             }
                         } else if let Some(failed_target) = &last_failed_target {
-                            error!("Internet outage: request failure on target '{}': {timestamp}", failed_target);
+                            error!("Internet outage detected on target '{}' at {timestamp}. Request failure. Please check your network connection or DNS settings. Please verify your internet connection and retry.", failed_target);
                         } else {
-                            error!("Internet outage: {timestamp}. Unknown error.");
+                            error!("Internet outage detected at {timestamp}. Unknown error occurred. Please verify your internet connection and retry.");
                         }
                         is_online = false;
                     }

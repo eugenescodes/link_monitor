@@ -1,5 +1,6 @@
 log_file = "logs/internet_monitor.log"
 log_to_console = true
+
 check_interval_seconds = 30
 max_retries = 2
 failure_threshold = 3
