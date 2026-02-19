@@ -1,0 +1,6 @@
+.git
+.gitignore
+target/
+logs/
+test_*.toml
+test_log.txt
