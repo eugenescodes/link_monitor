@@ -8,9 +8,12 @@ use std::{fs::read_to_string, time::Duration};
 #[derive(Deserialize, Debug, Clone)]
 pub struct AppConfig {
     log_file: String,
+    log_to_console: bool,
     check_interval_seconds: u64,
     max_retries: u32,
     failure_threshold: u32,
+    request_timeout_seconds: u64,
+    retry_delay_seconds: u64,
     ping_target: Vec<String>,
 }
 
@@ -41,7 +44,7 @@ fn load_config(path: &str) -> Result<AppConfig, String> {
     Ok(config)
 }
 
-fn init_logger(log_file_path: &str) -> Result<(), String> {
+fn init_logger(log_file_path: &str, log_to_console: bool) -> Result<(), String> {
     use std::fs::OpenOptions;
     let log_file = OpenOptions::new()
         .create(true)
@@ -49,18 +52,34 @@ fn init_logger(log_file_path: &str) -> Result<(), String> {
         .open(log_file_path)
         .map_err(|e| format!("Failed to open log file '{log_file_path}': {e}"))?;
 
-    CombinedLogger::init(vec![
-        TermLogger::new(
-            LevelFilter::Info,
+    let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![
+        WriteLogger::new(LevelFilter::Debug, Config::default(), log_file),
+    ];
+
+    if log_to_console {
+        loggers.push(TermLogger::new(
+            LevelFilter::Debug,
             Config::default(),
             TerminalMode::Mixed,
             ColorChoice::Auto,
-        ),
-        WriteLogger::new(LevelFilter::Info, Config::default(), log_file),
-    ])
-    .map_err(|e| format!("Failed to initialize logger: {e}"))?;
+        ));
+    }
+
+    CombinedLogger::init(loggers)
+        .map_err(|e| format!("Failed to initialize logger: {e}"))?;
 
     Ok(())
+}
+
+/// Represents the result of a single target check.
+#[derive(Debug)]
+enum CheckResult {
+    Success,
+    HttpError {
+        status: reqwest::StatusCode,
+        reason: String,
+    },
+    NetworkError,
 }
 
 /// Runs the internet connectivity monitoring loop.
@@ -77,51 +96,62 @@ async fn run_monitor_loop(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     /// Attempts to send HTTP GET requests to a target URL with retries.
     ///
-    /// Returns `Ok(true)` if any attempt succeeds, otherwise `Ok(false)`.
+    /// Returns a `CheckResult` indicating the outcome.
     async fn check_target(
         client: &reqwest::Client,
         target: &str,
         max_retries: u32,
         retry_delay: Duration,
-    ) -> Result<bool, Option<(reqwest::StatusCode, String)>> {
-        let mut last_status: Option<(reqwest::StatusCode, String)> = None;
+    ) -> CheckResult {
         for _attempt in 0..max_retries {
             match client.get(target).send().await {
                 Ok(response) => {
                     if response.status().is_success() {
-                        return Ok(true);
+                        return CheckResult::Success;
                     } else {
                         let status = response.status();
                         let reason = status
                             .canonical_reason()
                             .unwrap_or("Unknown reason")
                             .to_string();
-                        last_status = Some((status, reason));
+                        // Still a failure, but we'll log it and can retry.
+                        log::debug!(
+                            "Request to target '{}' returned unsuccessful status: {} ({})",
+                            target,
+                            status,
+                            reason
+                        );
                     }
                 }
-                Err(_e) => {
-                    // Log the error for debugging (optional)
-                    // eprintln!("Request error for target {}: {:?}", target, e);
-                    // Sleep before retrying
+                Err(e) => {
+                    log::debug!("Request error for target {}: {:?}", target, e);
+                    // Sleep before retrying on network error
                     tokio::time::sleep(retry_delay).await;
                 }
             }
         }
-        if let Some(status) = last_status {
-            Err(Some(status))
-        } else {
-            Ok(false)
+        // If all retries fail, determine the reason for the final failure.
+        // Try one last time to get a specific error.
+        match client.get(target).send().await {
+            Ok(response) => CheckResult::HttpError {
+                status: response.status(),
+                reason: response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown reason")
+                    .to_string(),
+            },
+            Err(_) => CheckResult::NetworkError,
         }
     }
 
     let mut is_online = true; // Initial internet connection state
-    let ping_target: Vec<String> = config.ping_target.clone();
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(config.request_timeout_seconds))
         .build()
         .expect("Failed to build HTTP client");
     let max_retries = config.max_retries;
-    let retry_delay = Duration::from_secs(2);
+    let retry_delay = Duration::from_secs(config.retry_delay_seconds);
     let mut consecutive_failures = 0;
     let failure_threshold = config.failure_threshold;
 
@@ -133,28 +163,20 @@ async fn run_monitor_loop(
             }
             _ = async {
                 let mut any_success = false;
-                let mut last_status: Option<(reqwest::StatusCode, String)> = None;
+                let mut last_error_result: Option<CheckResult> = None;
                 let mut last_failed_target: Option<String> = None;
 
-                for target in &ping_target {
+                for target in &config.ping_target {
                     match check_target(&client, target, max_retries, retry_delay).await {
-                        Ok(true) => {
+                        CheckResult::Success => {
                             any_success = true;
-                            break;
+                            break; // One success is enough to consider online
                         }
-                        Ok(false) => {
-                            // No success, continue to next target
-                        }
-
-                        Err(status_opt) => {
+                        result => {
+                            // It's a failure (HttpError or NetworkError)
+                            info!("Check failed for target '{}': {:?}", target, result);
                             last_failed_target = Some(target.clone());
-                            if let Some((status, reason)) = status_opt {
-                                last_status = Some((status, reason.clone()));
-                                error!("Request to target '{}' returned unsuccessful status: {} ({})", target, status, reason);
-                            } else {
-                                last_status = None;
-                                error!("Request to target '{}' failed due to network or other error", target);
-                            }
+                            last_error_result = Some(result);
                         }
                     }
                 }
@@ -163,27 +185,32 @@ async fn run_monitor_loop(
                 if any_success {
                     consecutive_failures = 0;
                     if !is_online {
-                        info!("Internet appeared at {timestamp}");
-                        info!("Internet outage ended at {timestamp}");
+                        info!("Internet connection restored at {timestamp}");
                         is_online = true;
                     }
                 } else {
                     consecutive_failures += 1;
 
-
-
                     if consecutive_failures >= failure_threshold && is_online {
-                        if let Some((status, reason)) = last_status {
-                            if let Some(failed_target) = &last_failed_target {
-                                error!("Internet outage detected on target '{}' at {timestamp}. Status: {} ({}). Please check your network connection or DNS settings. Please verify your internet connection and retry.", failed_target, status, reason);
-                            } else {
-                                error!("Internet outage detected at {timestamp}. Status: {} ({}). Please check your network connection or DNS settings. Please verify your internet connection and retry.", status, reason);
-                            }
-                        } else if let Some(failed_target) = &last_failed_target {
-                            error!("Internet outage detected on target '{}' at {timestamp}. Request failure. Please check your network connection or DNS settings. Please verify your internet connection and retry.", failed_target);
-                        } else {
-                            error!("Internet outage detected at {timestamp}. Unknown error occurred. Please verify your internet connection and retry.");
+                        let mut error_message = format!("Internet outage detected at {timestamp}.");
+                        if let Some(failed_target) = &last_failed_target {
+                            error_message.push_str(&format!(" Last failed target: '{}'.", failed_target));
                         }
+
+                        if let Some(error_result) = last_error_result {
+                            match error_result {
+                                CheckResult::HttpError { status, reason } => {
+                                    error_message.push_str(&format!(" Status: {} ({}).", status, reason));
+                                }
+                                CheckResult::NetworkError => {
+                                    error_message.push_str(" Reason: Network or other error.");
+                                }
+                                CheckResult::Success => { /* This case is not possible here */ }
+                            }
+                        }
+
+                        error_message.push_str(" Please check network connection/DNS settings.");
+                        error!("{}", error_message);
                         is_online = false;
                     }
                 }
@@ -197,7 +224,7 @@ async fn run_monitor_loop(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let config = load_config("config.toml")?;
-    init_logger(&config.log_file)?;
+    init_logger(&config.log_file, config.log_to_console)?;
 
     info!("Internet monitoring script started.");
     info!("Check targets: {:?}", config.ping_target);
@@ -212,20 +239,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
 #[cfg(test)]
 mod tests {
-    use crate::{AppConfig, run_monitor_loop};
+    use crate::AppConfig;
     use std::fs::File;
     use std::io::Write;
-    use tokio::runtime::Runtime;
-    use tokio::sync::oneshot;
 
     #[test]
     fn test_config_load() {
         // Create a minimal config.toml for testing
         let config_content = r#"
 log_file = "test_log.txt"
+log_to_console = false
 check_interval_seconds = 1
 max_retries = 2
 failure_threshold = 1
+request_timeout_seconds = 5
+retry_delay_seconds = 2
 ping_target = ["https://example.com", "https://example.org"]
 "#;
         let mut file = File::create("test_config.toml").expect("Failed to create test config");
@@ -250,9 +278,12 @@ ping_target = ["https://example.com", "https://example.org"]
     fn test_load_config_invalid_url() {
         let config_content = r#"
 log_file = "test_log.txt"
+log_to_console = false
 check_interval_seconds = 1
 max_retries = 2
 failure_threshold = 1
+request_timeout_seconds = 5
+retry_delay_seconds = 2
 ping_target = ["ftp://invalid-url.com", "not-a-url"]
 "#;
         let mut file =

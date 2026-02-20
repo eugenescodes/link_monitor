@@ -4,6 +4,8 @@ log_to_console = true
 check_interval_seconds = 30
 max_retries = 2
 failure_threshold = 3
+request_timeout_seconds = 5
+retry_delay_seconds = 2
 
 # List of targets to monitor
 ping_target = [

@@ -12,9 +12,12 @@ This tool monitors internet connectivity by sending HTTP GET requests to configu
 The project uses a `config.toml` file to configure its behavior. Key configuration options include:
 
 - `log_file`: Path to the log file where monitoring logs are saved.
+- `log_to_console`: A boolean (`true` or `false`) to enable or disable logging to the console.
 - `check_interval_seconds`: Interval in seconds between each round of checks.
 - `max_retries`: Number of retry attempts for each target before considering it failed.
 - `failure_threshold`: Number of consecutive failed checks across all targets to declare an internet outage.
+- `request_timeout_seconds`: Timeout in seconds for each HTTP request.
+- `retry_delay_seconds`: Delay in seconds between retry attempts.
 - `ping_target`: A list of URLs to be monitored.
 
 ## Main Components and Workflow
