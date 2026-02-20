@@ -52,9 +52,11 @@ fn init_logger(log_file_path: &str, log_to_console: bool) -> Result<(), String> 
         .open(log_file_path)
         .map_err(|e| format!("Failed to open log file '{log_file_path}': {e}"))?;
 
-    let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![
-        WriteLogger::new(LevelFilter::Debug, Config::default(), log_file),
-    ];
+    let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![WriteLogger::new(
+        LevelFilter::Debug,
+        Config::default(),
+        log_file,
+    )];
 
     if log_to_console {
         loggers.push(TermLogger::new(
@@ -65,8 +67,7 @@ fn init_logger(log_file_path: &str, log_to_console: bool) -> Result<(), String> 
         ));
     }
 
-    CombinedLogger::init(loggers)
-        .map_err(|e| format!("Failed to initialize logger: {e}"))?;
+    CombinedLogger::init(loggers).map_err(|e| format!("Failed to initialize logger: {e}"))?;
 
     Ok(())
 }
