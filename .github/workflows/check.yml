@@ -1,4 +1,4 @@
-name: Check
+name: check and format
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Clippy
         run: cargo clippy --workspace -- --deny warnings
 
@@ -24,8 +27,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          
       - name: Rustfmt
-        run: cargo fmt --all --check
+        run: cargo fmt --all
+        
+      - name: Commit and push formatting
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff-index --quiet HEAD || (git commit -m "style: auto-format code" && git push)
 
   test:
     runs-on: ${{ matrix.os }}
@@ -34,6 +51,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       - name: Cargo Test
         run: cargo test --workspace
