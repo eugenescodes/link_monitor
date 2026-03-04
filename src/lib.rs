@@ -115,10 +115,11 @@ pub fn init_logger(log_file_path: &str, log_to_console: bool) -> Result<(), Stri
 
     // create directory for log file if it doesn't exist
     if let Some(parent) = Path::new(log_file_path).parent()
-        && !parent.as_os_str().is_empty() {
-            create_dir_all(parent)
-                .map_err(|e| format!("Failed to create log directory '{:?}': {}", parent, e))?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        create_dir_all(parent)
+            .map_err(|e| format!("Failed to create log directory '{:?}': {}", parent, e))?;
+    }
 
     let log_file = OpenOptions::new()
         .create(true)
