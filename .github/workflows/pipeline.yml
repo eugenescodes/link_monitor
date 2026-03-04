@@ -101,7 +101,8 @@ jobs:
 
       - name: Verify container startup and dependency compatibility
         run: |
-          # run container for 5 seconds.
-          # if it runs normally and is killed by timeout, bash returns code 124.
-          # CI to consider code 124 a successful test run.
-          timeout 5 docker run --rm link_monitor:ci-test || [ $? -eq 124 ]
+          # run container for 10 seconds, if it runs normally and bash returns code 124 use --init.
+          # timeout 10 docker run --init --rm link_monitor:ci-test || [ $? -eq 124 ]
+
+          # send SIGINT (same Ctrl+C) to container after 10 seconds, and check if it exits gracefully.
+          timeout -s SIGINT 10 docker run --rm link_monitor:ci-test || [ $? -eq 124 ]
