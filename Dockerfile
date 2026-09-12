@@ -23,8 +23,6 @@ RUN strip target/release/link_monitor \
  && cp target/release/link_monitor /app/monitor
 
 # ---------- Runtime stage ----------
-# TODO: pin to a specific Debian codename or digest instead of the
-# floating "stable" tag, e.g. debian:bookworm-slim@sha256:<digest>
 FROM debian:stable-slim
 
 # Install only required system packages
