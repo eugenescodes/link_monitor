@@ -1,4 +1,3 @@
-
 # Link Monitor
 
 A Rust-based internet connectivity monitoring tool that periodically checks specified URLs and logs outages and recoveries.
@@ -19,6 +18,12 @@ The project uses a `config.toml` file to configure its behavior. Key configurati
 - `request_timeout_seconds`: Timeout in seconds for each HTTP request.
 - `retry_delay_seconds`: Delay in seconds between retry attempts.
 - `ping_target`: A list of URLs to be monitored.
+
+> [!NOTE]
+> The config path is currently fixed to `config.toml`, resolved relative to
+> the process's working directory -- there's no `--config` flag or env var
+> to point it elsewhere. When running via Docker, the working directory is
+> `/app`, so the file the binary actually reads is `/app/config.toml`.
 
 ## Main Components and Workflow
 
@@ -63,13 +68,38 @@ docker build -t link_monitor .
 podman build -t link_monitor .
 ```
 
-Run the container, mounting your config and log directory as needed:
+Run the container, mounting your config and log directory:
 
 ```bash
-docker run -v $(pwd)/config.toml:/etc/link_monitor/config.toml -v $(pwd)/logs:/etc/link_monitor/logs link_monitor
-# or
-podman run -v $(pwd)/config.toml:/etc/link_monitor/config.toml:Z -v $(pwd)/logs:/etc/link_monitor/logs:Z link_monitor
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/config.toml":/app/config.toml:ro \
+  -v "$(pwd)/logs":/app/logs \
+  link_monitor
 ```
+
+```bash
+# Podman -- add the :Z suffix on SELinux systems (Fedora, RHEL, CentOS)
+podman run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/config.toml":/app/config.toml:ro,Z \
+  -v "$(pwd)/logs":/app/logs:Z \
+  link_monitor
+```
+
+> [!NOTE]
+> The image ships with a default `config.toml` baked in, so `docker run link_monitor`
+> (with no mounts at all) works out of the box. Mounting your own file at
+> `/app/config.toml` overrides it -- no rebuild needed to change settings.
+>
+> Both mounts target `/app/...`, not `/etc/link_monitor/...`: the binary
+> resolves `config.toml` and its `log_file` setting relative to its working
+> directory, which is `/app` inside the container.
+>
+> The container runs as a dedicated non-root user. `--user "$(id -u):$(id -g)"`
+> makes it run as *you* instead, so it can write to your bind-mounted `logs/`
+> directory (owned by your host user) without a permission error. Not required
+> on Docker Desktop (macOS/Windows), which handles this automatically.
 
 ### Stopping the Application
 
@@ -84,7 +114,7 @@ Press Ctrl+C to stop the application gracefully. It will log shutdown events.
   podman logs -f <container_id_or_name>
   ```
 
-- View log files on the host machine (assuming logs directory is mounted):
+- View log files on the host machine (assuming the `logs/` directory is mounted):
 
   ```bash
   tail -f logs/internet_monitor.log

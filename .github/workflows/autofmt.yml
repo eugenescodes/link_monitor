@@ -1,0 +1,44 @@
+name: Auto-format
+
+# This is the ONLY workflow in the repo with write access, and it only ever
+# runs on `main` -- i.e. against already-merged, trusted code. It never
+# checks out or runs PR/fork code, so it can't be used to smuggle a write
+# through an untrusted checkout.
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  autofmt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Format code
+        run: cargo fmt --all
+
+      - name: Commit and push formatting
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Auto-fix formatting (cargo fmt)"
+            git push origin HEAD:refs/heads/main
+          else
+            echo "No formatting changes to commit."
+          fi

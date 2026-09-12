@@ -1,8 +1,10 @@
 name: Pipeline
 
+# Least privilege: this pipeline only reads the repository. Auto-formatting
+# on `main` (which needs write access) lives in a separate, minimal workflow:
+# .github/workflows/autofmt.yml
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,59 +24,43 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────
-  # JOB 1: BUILD, FORMAT & TEST (Run only on Push/PR/Dispatch)
+  # JOB: FORMAT, LINT, TEST & DOCKER SMOKE TEST
   # ─────────────────────────────────────────────
   build:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-          ref: ${{ github.head_ref || github.ref_name }}
+          # Never leave the GITHUB_TOKEN behind in .git/config.
+          persist-credentials: false
 
       - name: Set up Rust
+        # `dtolnay/rust-toolchain` deliberately uses the ref (here `stable`) as
+        # the toolchain selector, so this one is intentionally not SHA-pinned.
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
-      - name: Cache cargo registry
+      # Smart, hijack-resistant caching. `save-if` restricts cache *writes* to
+      # the default branch, so pull requests can restore the trusted cache but
+      # can never populate it -- an untrusted fork cannot poison `main`'s cache.
+      # rust-cache also refuses to cache pre-existing ~/.cargo/bin tools and the
+      # workspace crates themselves, shrinking the attack surface further.
+      - name: Cache cargo
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
+            ~/.cargo/registry
+            ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
 
-      - name: Auto-format code
-        run: cargo fmt --all
-
-      - name: Commit and push formatting
-        if: github.event_name == 'push'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          export GIT_MERGE_AUTOEDIT=no
-          export GIT_TERMINAL_PROMPT=0
-
-          BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
-
-          if [ -n "$(git status --porcelain)" ]; then
-            git add .
-            git commit -m "Auto-fix formatting (cargo fmt)"
-            git pull --rebase --no-edit origin "$BRANCH_NAME"
-            git push origin "HEAD:refs/heads/$BRANCH_NAME"
-          else
-            echo "No formatting changes to commit."
-          fi
+      - name: Check formatting
+        # Enforced here for every run; auto-fixing is delegated to the
+        # write-scoped Auto-format workflow (see .github/workflows/autofmt.yml).
+        run: cargo fmt --all -- --check
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -97,7 +83,9 @@ jobs:
           load: true
           tags: link_monitor:ci-test
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Only the default branch may populate the shared BuildKit cache, so
+          # pull requests cannot poison it (they still get a read via cache-from).
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Verify container startup and dependency compatibility
         run: |
@@ -106,3 +94,13 @@ jobs:
 
           # send SIGINT (same Ctrl+C) to container after 10 seconds, and check if it exits gracefully.
           timeout -s SIGINT 10 docker run --rm link_monitor:ci-test || [ $? -eq 124 ]
+
+      # --- Cache: save only on main ---
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
