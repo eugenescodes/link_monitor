@@ -7,6 +7,11 @@ name: Auto-format
 permissions:
   contents: write
 
+concurrency:
+  group: autofmt-main
+  # Never cancel an in-flight format commit half-way through the push.
+  cancel-in-progress: false
+
 on:
   push:
     branches:
@@ -36,8 +41,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           if [ -n "$(git status --porcelain)" ]; then
-            git add .
-            git commit -m "Auto-fix formatting (cargo fmt)"
+            git add -A
+            git commit -m "style: apply cargo fmt [skip ci]"
+            git pull --rebase --no-edit origin main
             git push origin HEAD:refs/heads/main
           else
             echo "No formatting changes to commit."

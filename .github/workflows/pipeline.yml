@@ -44,18 +44,21 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      # Smart, hijack-resistant caching. `save-if` restricts cache *writes* to
-      # the default branch, so pull requests can restore the trusted cache but
-      # can never populate it -- an untrusted fork cannot poison `main`'s cache.
-      # rust-cache also refuses to cache pre-existing ~/.cargo/bin tools and the
-      # workspace crates themselves, shrinking the attack surface further.
-      - name: Cache cargo
-        uses: actions/cache@v6
+      # Split restore/save on purpose: the plain `actions/cache` action also
+      # saves in its post step on EVERY run (including pull requests).
+      # `cache/restore` never writes, and the explicit `cache/save` further down
+      # is gated to the default branch -- so an untrusted fork can read the
+      # trusted cache but can never populate it (no cache poisoning of `main`).
+      - name: Restore cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         # Enforced here for every run; auto-fixing is delegated to the
@@ -95,12 +98,12 @@ jobs:
           # send SIGINT (same Ctrl+C) to container after 10 seconds, and check if it exits gracefully.
           timeout -s SIGINT 10 docker run --rm link_monitor:ci-test || [ $? -eq 124 ]
 
-      # --- Cache: save only on main ---
+      # --- Cache: save only on main, and only on a cache miss ---
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
