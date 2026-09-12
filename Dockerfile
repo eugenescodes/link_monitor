@@ -18,8 +18,9 @@ RUN mkdir -p src \
 COPY src ./src
 RUN cargo build --release --locked
 
-# Make the binary easy to copy into the runtime stage.
-RUN cp target/release/link_monitor /app/monitor
+# Strip symbols and stage the binary for the runtime stage.
+RUN strip target/release/link_monitor \
+ && cp target/release/link_monitor /app/monitor
 
 # ---------- Runtime stage ----------
 # TODO: pin to a specific Debian codename or digest instead of the
