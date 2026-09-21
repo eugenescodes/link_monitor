@@ -13,11 +13,17 @@ The project uses a `config.toml` file to configure its behavior. Key configurati
 - `log_file`: Path to the log file where monitoring logs are saved.
 - `log_to_console`: A boolean (`true` or `false`) to enable or disable logging to the console.
 - `check_interval_seconds`: Interval in seconds between each round of checks.
-- `max_retries`: Number of retry attempts for each target before considering it failed.
+- `max_retries`: Number of retry attempts for each target after the first request before considering it failed. Each target is requested up to `max_retries + 1` times; `0` means a single request with no retries.
 - `failure_threshold`: Number of consecutive failed checks across all targets to declare an internet outage.
 - `request_timeout_seconds`: Timeout in seconds for each HTTP request.
 - `retry_delay_seconds`: Delay in seconds between retry attempts.
 - `ping_target`: A list of URLs to be monitored.
+
+> [!NOTE]
+> The configuration is validated on startup. The application exits with an
+> error if `check_interval_seconds`, `failure_threshold`,
+> `request_timeout_seconds` or `retry_delay_seconds` is `0`, or if any
+> `ping_target` URL does not use the `http` or `https` scheme.
 
 > [!NOTE]
 > The config path is currently fixed to `config.toml`, resolved relative to
@@ -31,7 +37,7 @@ The project uses a `config.toml` file to configure its behavior. Key configurati
 - Initializes logging to file and console.
 - Creates an asynchronous Tokio runtime for concurrent operations.
 - Runs a monitoring loop that:
-  - Checks each target URL with retries.
+  - Checks the target URLs one by one (with retries) until the first success; if all of them fail, the round counts as a failure.
   - Logs success or failure for each attempt.
   - Tracks consecutive failures and logs internet outages when thresholds are met.
 - Supports graceful shutdown on Ctrl+C (SIGINT).

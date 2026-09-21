@@ -19,12 +19,12 @@ use std::{fs::read_to_string, time::Duration};
 /// failure_threshold = 3
 /// request_timeout_seconds = 5
 /// retry_delay_seconds = 2
-/// ping_target = ["[https://example.com](https://example.com)"]
+/// ping_target = ["https://example.com"]
 /// "#;
 ///
 /// let config: AppConfig = toml::from_str(config_toml).unwrap();
 /// assert_eq!(config.max_retries, 2);
-/// assert_eq!(config.ping_target[0], "[https://example.com](https://example.com)");
+/// assert_eq!(config.ping_target[0], "https://example.com");
 /// ```
 #[derive(Deserialize, Debug, Clone)]
 pub struct AppConfig {
@@ -41,7 +41,8 @@ pub struct AppConfig {
 /// Loads the configuration from a TOML file.
 ///
 /// # Errors
-/// Returns an error string if the file cannot be read, parsed, or if the URLs are invalid.
+/// Returns an error string if the file cannot be read or parsed, if any of the
+/// `ping_target` URLs is invalid, or if the timing/retry parameters are zero.
 ///
 /// # Examples
 ///
@@ -94,6 +95,20 @@ pub fn load_config(path: &str) -> Result<AppConfig, String> {
                 target
             ));
         }
+    }
+
+    // Validate timing/retry parameters: zero values would disable the pause
+    // between checks or the retry/threshold logic entirely.
+    if config.check_interval_seconds == 0
+        || config.failure_threshold == 0
+        || config.request_timeout_seconds == 0
+        || config.retry_delay_seconds == 0
+    {
+        return Err(
+            "check_interval_seconds, failure_threshold, request_timeout_seconds \
+             and retry_delay_seconds must be greater than 0"
+                .to_string(),
+        );
     }
 
     Ok(config)
@@ -178,7 +193,7 @@ pub enum CheckResult {
 ///         failure_threshold = 3
 ///         request_timeout_seconds = 5
 ///         retry_delay_seconds = 2
-///         ping_target = ["[https://example.com](https://example.com)"]
+///         ping_target = ["https://example.com"]
 ///     "#).unwrap();
 ///     
 ///     let _ = run_monitor_loop(&config).await;
@@ -193,42 +208,42 @@ pub async fn run_monitor_loop(
         max_retries: u32,
         retry_delay: Duration,
     ) -> CheckResult {
-        for _attempt in 0..max_retries {
+        // One initial attempt plus `max_retries` retries.
+        for attempt in 0..=max_retries {
+            let is_last_attempt = attempt == max_retries;
             match client.get(target).send().await {
                 Ok(response) => {
-                    if response.status().is_success() {
+                    let status = response.status();
+                    if status.is_success() {
                         return CheckResult::Success;
-                    } else {
-                        let status = response.status();
-                        let reason = status
-                            .canonical_reason()
-                            .unwrap_or("Unknown reason")
-                            .to_string();
-                        log::debug!(
-                            "Request to target '{}' returned unsuccessful status: {} ({})",
-                            target,
-                            status,
-                            reason
-                        );
                     }
+                    let reason = status
+                        .canonical_reason()
+                        .unwrap_or("Unknown reason")
+                        .to_string();
+                    if is_last_attempt {
+                        return CheckResult::HttpError { status, reason };
+                    }
+                    log::debug!(
+                        "Request to target '{}' returned unsuccessful status: {} ({})",
+                        target,
+                        status,
+                        reason
+                    );
+                    tokio::time::sleep(retry_delay).await;
                 }
                 Err(e) => {
+                    if is_last_attempt {
+                        return CheckResult::NetworkError;
+                    }
                     log::debug!("Request error for target {}: {:?}", target, e);
                     tokio::time::sleep(retry_delay).await;
                 }
             }
         }
-        match client.get(target).send().await {
-            Ok(response) => CheckResult::HttpError {
-                status: response.status(),
-                reason: response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("Unknown reason")
-                    .to_string(),
-            },
-            Err(_) => CheckResult::NetworkError,
-        }
+        // The loop above always returns on its final iteration
+        // (`is_last_attempt`), so this is only a safe fallback for the compiler.
+        CheckResult::NetworkError
     }
 
     let mut is_online = true;
@@ -338,6 +353,33 @@ ping_target = ["https://example.com", "https://example.org"]
         assert_eq!(config.failure_threshold, 1);
 
         std::fs::remove_file("test_config.toml").ok();
+    }
+
+    #[test]
+    fn test_load_config_rejects_zero_values() {
+        let config_content = r#"
+log_file = "test_log.txt"
+log_to_console = false
+check_interval_seconds = 0
+max_retries = 2
+failure_threshold = 1
+request_timeout_seconds = 5
+retry_delay_seconds = 2
+ping_target = ["https://example.com"]
+"#;
+        let mut file =
+            File::create("test_zero_config.toml").expect("Failed to create test config");
+        file.write_all(config_content.as_bytes())
+            .expect("Failed to write test config");
+
+        let load_result = load_config("test_zero_config.toml");
+
+        std::fs::remove_file("test_zero_config.toml").ok();
+
+        assert!(
+            load_result.is_err(),
+            "Config loading should fail when check_interval_seconds is 0"
+        );
     }
 
     #[test]
