@@ -367,8 +367,7 @@ request_timeout_seconds = 5
 retry_delay_seconds = 2
 ping_target = ["https://example.com"]
 "#;
-        let mut file =
-            File::create("test_zero_config.toml").expect("Failed to create test config");
+        let mut file = File::create("test_zero_config.toml").expect("Failed to create test config");
         file.write_all(config_content.as_bytes())
             .expect("Failed to write test config");
 
