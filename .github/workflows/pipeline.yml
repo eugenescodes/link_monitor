@@ -90,13 +90,19 @@ jobs:
           # pull requests cannot poison it (they still get a read via cache-from).
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
-      - name: Verify container startup and dependency compatibility
+      - name: Verify container startup and graceful shutdown
         run: |
-          # run container for 10 seconds, if it runs normally and bash returns code 124 use --init.
-          # timeout 10 docker run --init --rm link_monitor:ci-test || [ $? -eq 124 ]
-
-          # send SIGINT (same Ctrl+C) to container after 10 seconds, and check if it exits gracefully.
-          timeout -s SIGINT 10 docker run --rm link_monitor:ci-test || [ $? -eq 124 ]
+          # The container must still be running after 10 seconds (no crash on
+          # startup, e.g. a glibc mismatch), and `docker stop` (SIGTERM) must
+          # stop it gracefully with exit code 0 within the 5s kill timeout.
+          docker run -d --name smoke link_monitor:ci-test
+          trap 'docker logs smoke; docker rm -f smoke >/dev/null' EXIT
+          sleep 10
+          test "$(docker inspect -f '{{.State.Running}}' smoke)" = true
+          docker stop -t 5 smoke
+          test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = 0
+          # No `grep -q`: with pipefail an early exit could fail `docker logs` via SIGPIPE.
+          docker logs smoke 2>&1 | grep "SIGTERM received"
 
       # --- Cache: save only on main, and only on a cache miss ---
       - name: Save cargo cache

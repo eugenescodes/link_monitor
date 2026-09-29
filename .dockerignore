@@ -34,6 +34,9 @@ venv/
 # Avoid copying local build targets, let Docker compile it
 target/
 
+# Local runtime logs
+logs/
+
 # Cargo backup files
 **/*.rs.bk
 
