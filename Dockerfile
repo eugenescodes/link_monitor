@@ -5,7 +5,7 @@
 # security rebuilds via `docker build --pull`. Move both to the next Debian
 # release together; the runtime stage verifies below that the binary's
 # libraries are satisfied.
-FROM rust:1.98.1-slim-trixie AS builder
+FROM rust:1.99.0-slim-trixie AS builder
 
 WORKDIR /app
 
